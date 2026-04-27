@@ -5,6 +5,7 @@ import hashlib
 import html
 import json
 import mimetypes
+import os
 import re
 import shutil
 import subprocess
@@ -73,6 +74,17 @@ class BlockNode:
     kind: str
     content: str = ""
     level: int = 0
+
+
+def is_supported_setup_line(stripped: str) -> bool:
+    return stripped.startswith(
+        (
+            r"\definecolor",
+            r"\newcommand",
+            r"\renewcommand",
+            r"\newcolumntype",
+        )
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -185,6 +197,12 @@ def normalize_metadata_text(text: str) -> str:
     cleaned = re.sub(r"(?:\s*\|\s*){2,}", " | ", cleaned)
     cleaned = cleaned.strip(" |")
     return cleaned.strip()
+
+
+def normalize_caption_text(text: str) -> str:
+    normalized = normalize_inline_markup(normalize_metadata_text(text)).replace("\n", " ").strip()
+    normalized = re.sub(r"(?<!\\)\$(.+?)(?<!\\)\$", r"\1", normalized)
+    return normalized
 
 
 def replace_texttt_blocks(text: str) -> str:
@@ -339,7 +357,7 @@ def extract_local_table_setup(text: str, table_block: str) -> str:
             if collected:
                 break
             continue
-        if stripped.startswith(r"\definecolor") or stripped.startswith(r"\newcommand") or stripped.startswith(r"\renewcommand"):
+        if is_supported_setup_line(stripped):
             collected.append(stripped)
             continue
         if collected:
@@ -352,7 +370,7 @@ def extract_body_macro_setup(text: str) -> str:
     lines: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith(r"\definecolor") or stripped.startswith(r"\newcommand") or stripped.startswith(r"\renewcommand"):
+        if is_supported_setup_line(stripped):
             lines.append(stripped)
     return "\n".join(lines) + ("\n" if lines else "")
 
@@ -373,19 +391,19 @@ def normalize_math_snippet(latex_snippet: str, display_mode: bool) -> str:
 
 
 def recolor_svg(svg_text: str, theme: str) -> str:
-    if theme != "dark":
-        return svg_text
-    recolored = re.sub(
-        r'fill="rgb\(0%, 0%, 0%\)"',
-        'fill="rgb(100%, 100%, 100%)"',
-        svg_text,
-    )
-    recolored = re.sub(
-        r'stroke="rgb\(0%, 0%, 0%\)"',
-        'stroke="rgb(100%, 100%, 100%)"',
-        recolored,
-    )
-    return recolored
+    if theme == "dark":
+        recolored = re.sub(
+            r'fill="rgb\(0%, 0%, 0%\)"',
+            'fill="rgb(100%, 100%, 100%)"',
+            svg_text,
+        )
+        recolored = re.sub(
+            r'stroke="rgb\(0%, 0%, 0%\)"',
+            'stroke="rgb(100%, 100%, 100%)"',
+            recolored,
+        )
+        return recolored
+    return svg_text
 
 
 def render_math_to_svg(
@@ -447,14 +465,25 @@ def render_pdf_figure_to_png(source_pdf: Path, output_base: Path) -> Path:
     return output_base.with_suffix(".png")
 
 
+def copy_figure_asset(source: Path, output_base: Path) -> Path:
+    output_path = output_base.with_suffix(source.suffix.lower())
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, output_path)
+    return output_path
+
+
 def render_table_to_png(
     table_block: str,
     output_base: Path,
     preamble_packages: str,
     macro_definitions: str,
     local_table_setup: str,
+    source_root: Path,
 ) -> Path:
     output_base.parent.mkdir(parents=True, exist_ok=True)
+    tex_env = os.environ.copy()
+    existing_texinputs = tex_env.get("TEXINPUTS", "")
+    tex_env["TEXINPUTS"] = f"{source_root.resolve()}{os.pathsep}{existing_texinputs}"
     with tempfile.TemporaryDirectory(prefix="latex-epubifier-table-") as tmp_dir:
         tmp = Path(tmp_dir)
         tex_file = tmp / "table.tex"
@@ -479,6 +508,7 @@ def render_table_to_png(
             cwd=str(tmp),
             capture_output=True,
             text=True,
+            env=tex_env,
         )
         if proc.returncode != 0 and not (tmp / "table.pdf").exists():
             raise subprocess.CalledProcessError(
@@ -551,17 +581,23 @@ def replace_figures_with_images(text: str, source_root: Path, assets_dir: Path, 
     def replace(match: re.Match[str]) -> str:
         figure_ref = match.group(1).strip()
         source = (source_root / figure_ref).resolve()
-        if source.suffix.lower() == ".pdf" and source.exists():
-            asset_name = slug_for_content("figure", figure_ref)
-            output_base = assets_dir / "figures" / asset_name
-            png_path = render_pdf_figure_to_png(source, output_base)
-            manifest.setdefault("rendered_figures", []).append(
-                {
-                    "source": figure_ref,
-                    "asset": f"assets/figures/{png_path.name}",
-                }
-            )
-            return f'\\includegraphics{{assets/figures/{png_path.name}}}'
+        if not source.exists():
+            return match.group(0)
+        asset_name = slug_for_content("figure", figure_ref)
+        output_base = assets_dir / "figures" / asset_name
+        if source.suffix.lower() == ".pdf":
+            asset_path = render_pdf_figure_to_png(source, output_base)
+        elif source.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}:
+            asset_path = copy_figure_asset(source, output_base)
+        else:
+            return match.group(0)
+        manifest.setdefault("rendered_figures", []).append(
+            {
+                "source": figure_ref,
+                "asset": f"assets/figures/{asset_path.name}",
+            }
+        )
+        return f'\\includegraphics{{assets/figures/{asset_path.name}}}'
         return match.group(0)
 
     return INCLUDEGRAPHICS_RE.sub(replace, text)
@@ -575,11 +611,11 @@ def replace_tables_with_images(
     macro_definitions: str,
     source_text: str,
     body_macro_setup: str,
+    source_root: Path,
 ) -> str:
     def replace(match: re.Match[str]) -> str:
         table_block = match.group(0).strip()
-        caption_match = re.search(r"\\caption\{(.*?)\}", table_block, flags=re.DOTALL)
-        caption = caption_match.group(1).strip() if caption_match else "Table"
+        caption = normalize_caption_text(extract_command_arg(table_block, "caption") or "Table")
         asset_name = slug_for_content("table", table_block)
         output_base = assets_dir / "tables" / asset_name
         local_table_setup = extract_local_table_setup(source_text, table_block)
@@ -589,6 +625,7 @@ def replace_tables_with_images(
             preamble_packages,
             macro_definitions + body_macro_setup,
             local_table_setup,
+            source_root,
         )
         manifest.setdefault("rendered_tables", []).append(
             {
@@ -652,16 +689,26 @@ def normalize_prompt_block(text: str) -> str:
     return cleaned.strip()
 
 
+def escape_table_placeholder_captions(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        prefix = match.group(1)
+        caption = match.group(2)
+        suffix = match.group(3)
+        return f'{prefix}{html.escape(caption, quote=True)}{suffix}'
+
+    return re.sub(r'(<latex-epub-table\s+[^>]*caption=")(.*?)("></latex-epub-table>)', replace, text, flags=re.DOTALL)
+
+
 def parse_figure_block(block: str) -> str:
     image_match = re.search(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}", block)
-    caption_match = re.search(r"\\caption\{(.*?)\}", block, flags=re.DOTALL)
     img_html = ""
     if image_match:
         src = html.escape(image_match.group(1).strip(), quote=True)
         img_html = f'<img src="{src}" alt="figure" />'
     caption_html = ""
-    if caption_match:
-        caption = normalize_inline_markup(caption_match.group(1))
+    caption = extract_command_arg(block, "caption")
+    if caption:
+        caption = normalize_caption_text(caption)
         caption_html = f"<figcaption>{caption}</figcaption>"
     return f"<figure>{img_html}{caption_html}</figure>"
 
@@ -762,8 +809,9 @@ def render_block(block: BlockNode) -> str:
         if not match:
             return block.content
         src = match.group(1)
-        caption = match.group(2)
-        return f'<figure class="table-figure"><img src="{src}" alt="{caption}" /><figcaption>{caption}</figcaption></figure>'
+        caption = html.unescape(match.group(2))
+        alt_text = html.escape(re.sub(r"<[^>]+>", "", caption), quote=True)
+        return f'<figure class="table-figure"><img src="{src}" alt="{alt_text}" /><figcaption>{caption}</figcaption></figure>'
     if block.kind == "prompt":
         prompt = html.escape(normalize_prompt_block(block.content))
         return f'<pre class="prompt-block"><code>{prompt}</code></pre>'
@@ -963,6 +1011,11 @@ def build_epub_css(theme: str = "auto") -> str:
         "}",
         ".equation img {",
         "  display: inline-block;",
+        "}",
+        "@media (prefers-color-scheme: dark) {",
+        "  .math-inline, .equation img {",
+        "    filter: invert(1) hue-rotate(180deg);",
+        "  }",
         "}",
         "code {",
         "  font-family: monospace;",
@@ -1239,8 +1292,10 @@ def render_assets_and_reinsert(
         macro_definitions,
         expanded_source,
         body_macro_setup,
+        main_tex.parent,
     )
     working = sanitize_latex(raw_with_tables)
+    working = escape_table_placeholder_captions(working)
     working = replace_figures_with_images(working, main_tex.parent, assets_dir, manifest)
     working = replace_display_math_with_images(
         working, assets_dir, manifest, macro_definitions, math_theme=math_theme
@@ -1314,7 +1369,7 @@ def run(
 
 def main() -> int:
     args = parse_args()
-    math_theme = "dark" if args.epub_theme == "dark" else "light"
+    math_theme = "dark" if args.epub_theme == "dark" else "auto"
     artifacts = run(
         args.main_tex,
         args.output_dir,

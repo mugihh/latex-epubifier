@@ -13,6 +13,7 @@ env/
 build/
 build-dark/
 build-check/
+arXiv-*/
 
 *.epub
 *.log
