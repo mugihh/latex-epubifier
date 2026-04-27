@@ -182,10 +182,21 @@ def extract_command_arg(text: str, command: str) -> str:
     return "".join(chars).strip()
 
 
+def unescape_latex_text(text: str) -> str:
+    return (
+        text.replace(r"\%", "%")
+        .replace(r"\&", "&")
+        .replace(r"\#", "#")
+        .replace(r"\_", "_")
+        .replace(r"\$", "$")
+    )
+
+
 def normalize_metadata_text(text: str) -> str:
     if not text:
         return ""
-    cleaned = re.sub(r"(?m)%.*$", " ", text)
+    cleaned = re.sub(r"(?m)(?<!\\)%.*$", " ", text)
+    cleaned = unescape_latex_text(cleaned)
     cleaned = cleaned.replace(r"\{", "{").replace(r"\}", "}")
     cleaned = re.sub(r"\\texttt\{([^}]*)\}", r"\1", cleaned)
     cleaned = re.sub(r"\\(?:textit|emph|textbf)\{([^}]*)\}", r"\1", cleaned)
@@ -670,6 +681,7 @@ def normalize_inline_markup(text: str) -> str:
     normalized = text
     normalized = re.sub(r"\\footnote\{([^}]+)\}", r' <span class="footnote">[\1]</span>', normalized)
     normalized = normalize_references(normalized)
+    normalized = unescape_latex_text(normalized)
     normalized = normalized.replace("&", "&amp;")
     normalized = re.sub(r"<(?=\s*\d)", "&lt;", normalized)
     normalized = re.sub(r"~", " ", normalized)
