@@ -15,6 +15,12 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .html_render import (
+    build_front_matter,
+    build_html_ready,
+    build_standalone_xhtml,
+    escape_table_placeholder_captions,
+)
 from .parsing import (
     expand_inputs,
     extract_body,
@@ -89,13 +95,6 @@ class BuildArtifacts:
     title: str
     author: str
     manifest: dict
-
-
-@dataclass
-class BlockNode:
-    kind: str
-    content: str = ""
-    level: int = 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -255,15 +254,6 @@ def build_manifest(expanded: str, body: str, sanitized: str) -> dict:
         "body_length": len(body),
         "sanitized_length": len(sanitized),
     }
-
-
-def build_front_matter(title: str, author: str) -> str:
-    parts: list[str] = []
-    if title:
-        parts.append(f"<h1>{html.escape(title)}</h1>")
-    if author:
-        parts.append(f'<p class="authors">{html.escape(author)}</p>')
-    return "\n".join(parts)
 
 
 def render_citation_links(text: str) -> str:
@@ -636,189 +626,6 @@ def normalize_prompt_block(text: str) -> str:
     cleaned = re.sub(r"\\{2,}", "\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
-
-
-def escape_table_placeholder_captions(text: str) -> str:
-    def replace(match: re.Match[str]) -> str:
-        prefix = match.group(1)
-        caption = match.group(2)
-        suffix = match.group(3)
-        return f'{prefix}{html.escape(caption, quote=True)}{suffix}'
-
-    return re.sub(r'(<latex-epub-table\s+[^>]*caption=")(.*?)("></latex-epub-table>)', replace, text, flags=re.DOTALL)
-
-
-def parse_figure_block(block: str) -> str:
-    image_match = re.search(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}", block)
-    img_html = ""
-    if image_match:
-        src = html.escape(image_match.group(1).strip(), quote=True)
-        img_html = f'<img src="{src}" alt="figure" />'
-    caption_html = ""
-    caption = extract_command_arg(block, "caption")
-    if caption:
-        caption = normalize_caption_text(caption)
-        caption_html = f"<figcaption>{caption}</figcaption>"
-    return f"<figure>{img_html}{caption_html}</figure>"
-
-
-STRUCTURAL_TOKEN_RE = re.compile(
-    r"\\begin\{abstract\}.*?\\end\{abstract\}"
-    r"|\\begin\{figure\*?\}(?:\[[^\]]*\])?.*?\\end\{figure\*?\}"
-    r"|\\(?:section|subsection|subsubsection)\*?\{.*?\}"
-    r"|<latex-epub-block-math\s+[^>]*></latex-epub-block-math>"
-    r"|<latex-epub-table\s+[^>]*></latex-epub-table>"
-    r"|<prompt-block>.*?</prompt-block>",
-    re.DOTALL,
-)
-
-
-def parse_blocks(text: str) -> list[BlockNode]:
-    blocks: list[BlockNode] = []
-    working = text
-    working = re.sub(r"\\begin\{small\}|\\end\{small\}", "", working)
-    working = re.sub(r"\r\n", "\n", working)
-    cursor = 0
-    tokens: list[str] = []
-    for match in STRUCTURAL_TOKEN_RE.finditer(working):
-        if match.start() > cursor:
-            tokens.append(working[cursor:match.start()])
-        tokens.append(match.group(0))
-        cursor = match.end()
-    if cursor < len(working):
-        tokens.append(working[cursor:])
-
-    for token in tokens:
-        chunk = token.strip()
-        if not chunk:
-            continue
-        if chunk.startswith(r"\begin{abstract}"):
-            content = chunk.removeprefix(r"\begin{abstract}").removesuffix(r"\end{abstract}").strip()
-            blocks.append(BlockNode(kind="abstract", content=content))
-            continue
-        if chunk.startswith(r"\begin{figure"):
-            blocks.append(BlockNode(kind="figure", content=chunk))
-            continue
-        if chunk.startswith("<latex-epub-block-math"):
-            blocks.append(BlockNode(kind="display_math", content=chunk))
-            continue
-        if chunk.startswith("<latex-epub-table"):
-            blocks.append(BlockNode(kind="table", content=chunk))
-            continue
-        if chunk.startswith("<prompt-block>"):
-            content = chunk.removeprefix("<prompt-block>").removesuffix("</prompt-block>").strip()
-            blocks.append(BlockNode(kind="prompt", content=content))
-            continue
-        heading_match = re.fullmatch(r"\\(section|subsection|subsubsection)\*?\{(.*)\}", chunk, flags=re.DOTALL)
-        if heading_match:
-            level_map = {"section": 1, "subsection": 2, "subsubsection": 3}
-            blocks.append(
-                BlockNode(
-                    kind="heading",
-                    level=level_map[heading_match.group(1)],
-                    content=heading_match.group(2).strip(),
-                )
-            )
-            continue
-        paragraphs = re.split(r"\n\s*\n", chunk)
-        for paragraph in paragraphs:
-            para = paragraph.strip()
-            if not para:
-                continue
-            para_heading_match = re.match(r"\\paragraph\{([^}]+)\}\s*(.*)", para, flags=re.DOTALL)
-            if para_heading_match:
-                title = para_heading_match.group(1).strip()
-                rest = para_heading_match.group(2).strip()
-                content = f"<strong>{title}</strong>"
-                if rest:
-                    content += f" {rest}"
-                blocks.append(BlockNode(kind="paragraph", content=content))
-                continue
-            blocks.append(BlockNode(kind="paragraph", content=para))
-    return blocks
-
-
-def render_block(block: BlockNode) -> str:
-    if block.kind == "heading":
-        title = normalize_inline_markup(block.content)
-        return f"<h{block.level}>{title}</h{block.level}>"
-    if block.kind == "abstract":
-        return f'<section class="abstract"><p>{normalize_inline_markup(block.content)}</p></section>'
-    if block.kind == "figure":
-        return parse_figure_block(block.content)
-    if block.kind == "display_math":
-        match = re.search(r'src="([^"]+)" alt="([^"]*)"', block.content)
-        if not match:
-            return block.content
-        src = match.group(1)
-        alt = match.group(2)
-        return f'<div class="equation"><img src="{src}" alt="{alt}" /></div>'
-    if block.kind == "table":
-        match = re.search(r'src="([^"]+)" caption="([^"]*)"', block.content)
-        if not match:
-            return block.content
-        src = match.group(1)
-        caption = html.unescape(match.group(2))
-        alt_text = html.escape(re.sub(r"<[^>]+>", "", caption), quote=True)
-        return f'<figure class="table-figure"><img src="{src}" alt="{alt_text}" /><figcaption>{caption}</figcaption></figure>'
-    if block.kind == "prompt":
-        prompt = html.escape(normalize_prompt_block(block.content))
-        return f'<pre class="prompt-block"><code>{prompt}</code></pre>'
-    if block.kind == "paragraph":
-        content = normalize_inline_markup(block.content)
-        return f"<p>{content}</p>"
-    return block.content
-
-
-def build_html_ready(sanitized: str) -> str:
-    blocks = parse_blocks(sanitized)
-    rendered = [render_block(block) for block in blocks]
-    return "\n".join(rendered).strip() + "\n"
-
-
-def build_standalone_xhtml(body_html: str, title: str = "latex-epubifier preview") -> str:
-    safe_title = html.escape(title)
-    return "\n".join(
-        [
-            '<?xml version="1.0" encoding="utf-8"?>',
-            '<!DOCTYPE html>',
-            '<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">',
-            "<head>",
-            '  <meta charset="utf-8" />',
-            f"  <title>{safe_title}</title>",
-            "  <style>",
-            "    html { background: #ffffff; color: #111111; }",
-            "    body { max-width: 42rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; line-height: 1.6; font-family: serif; }",
-            "    h1, h2, h3 { line-height: 1.25; margin-top: 1.5em; margin-bottom: 0.5em; font-weight: 600; }",
-            "    p { margin: 0.9em 0; }",
-            "    figure { margin: 1.25em 0; }",
-            "    figcaption { font-size: 0.95em; color: #333333; margin-top: 0.45em; }",
-            "    img { max-width: 100%; height: auto; }",
-            "    .equation { margin: 1.1em 0; text-align: center; }",
-            "    .math-inline { vertical-align: -0.2em; display: inline-block; max-height: 1.35em; margin: 0 0.08em; }",
-            "    code { font-family: monospace; font-size: 0.92em; background: transparent; padding: 0; border-radius: 0; }",
-            "    pre.prompt-block { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; background: transparent; border: none; padding: 0; margin: 1em 0; font-size: 0.92rem; line-height: 1.45; }",
-            "    .table-figure img { background: white; }",
-            "    .xref { color: inherit; }",
-            "    .citation-link { color: #555555; text-decoration-line: underline; text-decoration-style: dashed; text-decoration-color: #8a8a8a; text-underline-offset: 0.12em; }",
-            "    @media (prefers-color-scheme: dark) { .citation-link { color: #c8c8c8; text-decoration-color: #a8a8a8; } }",
-            "    .footnote { color: inherit; font-size: 0.95em; }",
-            "    .abstract { padding: 0; background: transparent; border: none; }",
-            "    .authors { margin-top: -0.15rem; color: inherit; font-size: 0.98rem; }",
-            "    .references { margin-top: 2.25rem; }",
-            "    .reference-list { padding-left: 1.4rem; }",
-            "    .reference-list li { margin: 0.7rem 0; }",
-            "    .ref-title { font-style: italic; }",
-            "    @media (max-width: 640px) { body { padding: 1rem 0.875rem 2.5rem; } }",
-            "  </style>",
-            "</head>",
-            "<body>",
-            body_html.strip(),
-            "</body>",
-            "</html>",
-            "",
-        ]
-    )
 
 
 def build_epub_chapter_xhtml(body_html: str, title: str, author: str) -> str:
@@ -1291,7 +1098,13 @@ def render_assets_and_reinsert(
     working = replace_inline_math_with_images(
         working, assets_dir, manifest, macro_definitions, math_theme=math_theme, progress=progress
     )
-    return build_html_ready(working)
+    return build_html_ready(
+        working,
+        normalize_inline_markup,
+        normalize_prompt_block,
+        extract_command_arg,
+        normalize_caption_text,
+    )
 
 
 def run(
@@ -1321,7 +1134,13 @@ def run(
     title = normalize_metadata_text(extract_command_arg(preamble, "title"))
     author = normalize_metadata_text(extract_command_arg(preamble, "author"))
     manifest = build_manifest(expanded, body, sanitized)
-    html_ready = build_html_ready(sanitized)
+    html_ready = build_html_ready(
+        sanitized,
+        normalize_inline_markup,
+        normalize_prompt_block,
+        extract_command_arg,
+        normalize_caption_text,
+    )
     macro_definitions = extract_macro_definitions(preamble, MACRO_PATTERNS)
     preamble_packages = extract_usepackage_lines(preamble, USEPACKAGE_LINE_RE)
     body_macro_setup = extract_body_macro_setup(body)
