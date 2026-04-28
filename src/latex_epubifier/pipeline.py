@@ -80,6 +80,22 @@ class BlockNode:
     level: int = 0
 
 
+@dataclass
+class ProgressReporter:
+    enabled: bool = True
+
+    def step(self, current: int, total: int, message: str) -> None:
+        if not self.enabled:
+            return
+        print(f"[{current}/{total}] {message}", flush=True)
+
+    def item(self, category: str, current: int, total: int, detail: str = "") -> None:
+        if not self.enabled:
+            return
+        suffix = f": {detail}" if detail else ""
+        print(f"    {category} {current}/{total}{suffix}", flush=True)
+
+
 def is_supported_setup_line(stripped: str) -> bool:
     return stripped.startswith(
         (
@@ -311,6 +327,13 @@ def build_manifest(expanded: str, body: str, sanitized: str) -> dict:
         "body_length": len(body),
         "sanitized_length": len(sanitized),
     }
+
+
+def count_bibliography_items(expanded: str, main_tex: Path) -> int:
+    bibliography_text = find_bibliography_text(expanded, main_tex)
+    if not bibliography_text or bibliography_text.lstrip().startswith("% Missing bibliography output"):
+        return 0
+    return len(split_bibliography_items(bibliography_text))
 
 
 def build_front_matter(title: str, author: str) -> str:
@@ -624,12 +647,21 @@ def replace_display_math_with_images(
     manifest: dict,
     macro_definitions: str,
     math_theme: str = "light",
+    progress: ProgressReporter | None = None,
 ) -> str:
+    matches = list(DISPLAY_MATH_RE.finditer(text))
+    total = len(matches)
+    progress_count = 0
+
     def replace(match: re.Match[str]) -> str:
+        nonlocal progress_count
         groups = [group for group in match.groups() if group]
         if not groups:
             return match.group(0)
         content = groups[0].strip()
+        progress_count += 1
+        if progress:
+            progress.item("display math", progress_count, total)
         block = content
         asset_name = slug_for_content(f"display-math-{math_theme}", block)
         svg_path = assets_dir / "math" / f"{asset_name}.svg"
@@ -649,9 +681,18 @@ def replace_inline_math_with_images(
     manifest: dict,
     macro_definitions: str,
     math_theme: str = "light",
+    progress: ProgressReporter | None = None,
 ) -> str:
+    matches = list(INLINE_MATH_RE.finditer(text))
+    total = len(matches)
+    progress_count = 0
+
     def replace(match: re.Match[str]) -> str:
+        nonlocal progress_count
         content = match.group(1).strip()
+        progress_count += 1
+        if progress:
+            progress.item("inline math", progress_count, total)
         inline = f"${content}$"
         asset_name = slug_for_content(f"inline-math-{math_theme}", inline)
         svg_path = assets_dir / "math" / f"{asset_name}.svg"
@@ -665,12 +706,26 @@ def replace_inline_math_with_images(
     return INLINE_MATH_RE.sub(replace, text)
 
 
-def replace_figures_with_images(text: str, source_root: Path, assets_dir: Path, manifest: dict) -> str:
+def replace_figures_with_images(
+    text: str,
+    source_root: Path,
+    assets_dir: Path,
+    manifest: dict,
+    progress: ProgressReporter | None = None,
+) -> str:
+    matches = list(INCLUDEGRAPHICS_RE.finditer(text))
+    total = len(matches)
+    progress_count = 0
+
     def replace(match: re.Match[str]) -> str:
+        nonlocal progress_count
         figure_ref = match.group(1).strip()
         source = (source_root / figure_ref).resolve()
         if not source.exists():
             return match.group(0)
+        progress_count += 1
+        if progress:
+            progress.item("figures", progress_count, total, figure_ref)
         asset_name = slug_for_content("figure", figure_ref)
         output_base = assets_dir / "figures" / asset_name
         if source.suffix.lower() == ".pdf":
@@ -700,10 +755,19 @@ def replace_tables_with_images(
     source_text: str,
     body_macro_setup: str,
     source_root: Path,
+    progress: ProgressReporter | None = None,
 ) -> str:
+    matches = list(TABLE_BLOCK_RE.finditer(text))
+    total = len(matches)
+    progress_count = 0
+
     def replace(match: re.Match[str]) -> str:
+        nonlocal progress_count
         table_block = match.group(0).strip()
         caption = normalize_caption_text(extract_command_arg(table_block, "caption") or "Table")
+        progress_count += 1
+        if progress:
+            progress.item("tables", progress_count, total, caption)
         asset_name = slug_for_content("table", table_block)
         output_base = assets_dir / "tables" / asset_name
         local_table_setup = extract_local_table_setup(source_text, table_block)
@@ -1393,6 +1457,7 @@ def render_assets_and_reinsert(
     expanded_source: str,
     body_macro_setup: str,
     math_theme: str = "light",
+    progress: ProgressReporter | None = None,
 ) -> str:
     assets_dir = output_dir / "assets"
     raw_with_tables = replace_tables_with_images(
@@ -1404,15 +1469,16 @@ def render_assets_and_reinsert(
         expanded_source,
         body_macro_setup,
         main_tex.parent,
+        progress=progress,
     )
     working = sanitize_latex(raw_with_tables)
     working = escape_table_placeholder_captions(working)
-    working = replace_figures_with_images(working, main_tex.parent, assets_dir, manifest)
+    working = replace_figures_with_images(working, main_tex.parent, assets_dir, manifest, progress=progress)
     working = replace_display_math_with_images(
-        working, assets_dir, manifest, macro_definitions, math_theme=math_theme
+        working, assets_dir, manifest, macro_definitions, math_theme=math_theme, progress=progress
     )
     working = replace_inline_math_with_images(
-        working, assets_dir, manifest, macro_definitions, math_theme=math_theme
+        working, assets_dir, manifest, macro_definitions, math_theme=math_theme, progress=progress
     )
     return build_html_ready(working)
 
@@ -1444,8 +1510,13 @@ def run(
     render_assets: bool = True,
     math_theme: str = "light",
     debug: bool = False,
+    progress: ProgressReporter | None = None,
 ) -> BuildArtifacts:
+    if progress:
+        progress.step(1, 6, "Expanding LaTeX inputs")
     expanded = expand_inputs(main_tex)
+    if progress:
+        progress.step(2, 6, "Parsing document structure and bibliography")
     preamble = extract_preamble(expanded)
     body = extract_body(expanded)
     sanitized = sanitize_latex(body)
@@ -1457,8 +1528,11 @@ def run(
     macro_definitions = extract_macro_definitions(preamble)
     preamble_packages = extract_usepackage_lines(preamble)
     body_macro_setup = extract_body_macro_setup(body)
+    manifest["references_count"] = count_bibliography_items(expanded, main_tex)
 
     if render_assets:
+        if progress:
+            progress.step(3, 6, "Rendering tables, figures, and math assets")
         html_ready = render_assets_and_reinsert(
             body,
             sanitized,
@@ -1470,17 +1544,19 @@ def run(
             expanded,
             body_macro_setup,
             math_theme,
+            progress=progress,
         )
 
+    if progress:
+        progress.step(4, 6, "Composing final HTML")
     front_matter = build_front_matter(title, author)
     if front_matter:
         html_ready = front_matter + "\n" + html_ready
     if references_html:
         html_ready = html_ready.rstrip() + "\n" + references_html + "\n"
-        manifest["references_count"] = len(split_bibliography_items(find_bibliography_text(expanded, main_tex)))
-    else:
-        manifest["references_count"] = 0
 
+    if progress:
+        progress.step(5, 6, "Writing output files")
     output_dir.mkdir(parents=True, exist_ok=True)
     if debug:
         (output_dir / "expanded.tex").write_text(expanded, encoding="utf-8")
@@ -1511,12 +1587,14 @@ def run(
 def main() -> int:
     args = parse_args()
     math_theme = "dark" if args.epub_theme == "dark" else "auto"
+    progress = ProgressReporter()
     artifacts = run(
         args.main_tex,
         args.output_dir,
         render_assets=True,
         math_theme=math_theme,
         debug=args.debug,
+        progress=progress,
     )
     temp_epub_dir: Path | None = None
     epub_root = args.output_dir / "epub"
@@ -1524,6 +1602,7 @@ def main() -> int:
         temp_epub_dir = Path(tempfile.mkdtemp(prefix="latex-epubifier-epub-"))
         epub_root = temp_epub_dir / "epub"
     try:
+        progress.step(6, 6, "Packaging EPUB")
         epub_path = package_epub(
             args.output_dir,
             epub_root,
