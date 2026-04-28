@@ -17,6 +17,7 @@ from pathlib import Path
 
 
 INPUT_RE = re.compile(r"\\input\{([^}]+)\}")
+INCLUDE_RE = re.compile(r"\\include\{([^}]+)\}")
 INCLUDEGRAPHICS_RE = re.compile(
     r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}",
     re.MULTILINE,
@@ -28,6 +29,8 @@ DISPLAY_MATH_RE = re.compile(
 )
 USEPACKAGE_LINE_RE = re.compile(r"^\\usepackage(?:\[[^\]]*\])?\{[^}]+\}\s*$", re.MULTILINE)
 TABLE_BLOCK_RE = re.compile(r"\\begin\{table\*?\}.*?\\end\{table\*?\}", re.DOTALL)
+BIBLIOGRAPHY_RE = re.compile(r"\\bibliography\{([^}]+)\}")
+BIBITEM_RE = re.compile(r"\\bibitem(?:\[[^\]]*\])?\{([^}]+)\}")
 
 
 PREAMBLE_PATTERNS = [
@@ -64,6 +67,7 @@ class BuildArtifacts:
     body: str
     sanitized: str
     html_ready: str
+    references_html: str
     title: str
     author: str
     manifest: dict
@@ -135,7 +139,8 @@ def expand_inputs(tex_path: Path, seen: set[Path] | None = None) -> str:
             return f"% Missing input: {rel}\n"
         return expand_inputs(child, seen)
 
-    return INPUT_RE.sub(replace, text)
+    expanded = INPUT_RE.sub(replace, text)
+    return INCLUDE_RE.sub(replace, expanded)
 
 
 def extract_body(text: str) -> str:
@@ -267,6 +272,9 @@ def sanitize_latex(text: str) -> str:
     cleaned = re.sub(r"\\ref\{([^}]+)\}", r"<ref data-label='\1'>\1</ref>", cleaned)
     cleaned = re.sub(r"\\label\{[^}]+\}", "", cleaned)
     cleaned = re.sub(r"\\url\{([^}]+)\}", r"\1", cleaned)
+    cleaned = re.sub(r"\\href\{([^}]+)\}\{([^}]+)\}", r"\2 (\1)", cleaned)
+    cleaned = re.sub(r"\\doi\{([^}]+)\}", r"doi: \1", cleaned)
+    cleaned = re.sub(r"\\newblock\b", " ", cleaned)
     cleaned = re.sub(r"\\(?:textit|emph)\{([^}]+)\}", r"<em>\1</em>", cleaned)
     cleaned = re.sub(r"\\textbf\{([^}]+)\}", r"<strong>\1</strong>", cleaned)
     cleaned = re.sub(r"\\begin\{itemize\}", "", cleaned)
@@ -312,6 +320,80 @@ def build_front_matter(title: str, author: str) -> str:
     if author:
         parts.append(f'<p class="authors">{html.escape(author)}</p>')
     return "\n".join(parts)
+
+
+def find_bibliography_text(expanded: str, main_tex: Path) -> str:
+    inline_match = re.search(
+        r"\\begin\{thebibliography\}.*?\\end\{thebibliography\}",
+        expanded,
+        flags=re.DOTALL,
+    )
+    if inline_match:
+        return inline_match.group(0)
+
+    bbl_path = main_tex.with_suffix(".bbl")
+    if bbl_path.exists():
+        return bbl_path.read_text(encoding="utf-8")
+
+    bibliography_match = BIBLIOGRAPHY_RE.search(expanded)
+    if bibliography_match:
+        return f"% Missing bibliography output for: {bibliography_match.group(1)}\n"
+    return ""
+
+
+def split_bibliography_items(bibliography_text: str) -> list[tuple[str, str]]:
+    matches = list(BIBITEM_RE.finditer(bibliography_text))
+    items: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(bibliography_text)
+        key = match.group(1).strip()
+        content = bibliography_text[start:end].strip()
+        if content:
+            items.append((key, content))
+    return items
+
+
+def normalize_reference_item_text(text: str) -> str:
+    cleaned = sanitize_latex(text)
+    cleaned = re.sub(r"\\begin\{[^}]+\}|\\end\{[^}]+\}", " ", cleaned)
+    cleaned = re.sub(r"\\[A-Za-z]+\*?(?:\[[^\]]*\])?", " ", cleaned)
+    cleaned = cleaned.replace("{", "").replace("}", "")
+    cleaned = normalize_inline_markup(cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"\s+([,.;:])", r"\1", cleaned)
+    return cleaned.strip()
+
+
+def emphasize_reference_title(reference_html: str) -> str:
+    match = re.search(r"([“\"'])(.+?)([”\"'])", reference_html)
+    if not match:
+        return reference_html
+    title = match.group(2).strip()
+    if len(title) < 8:
+        return reference_html
+    replacement = f'{match.group(1)}<em class="ref-title">{title}</em>{match.group(3)}'
+    return reference_html[: match.start()] + replacement + reference_html[match.end() :]
+
+
+def build_references_html(expanded: str, main_tex: Path) -> str:
+    bibliography_text = find_bibliography_text(expanded, main_tex)
+    if not bibliography_text or bibliography_text.lstrip().startswith("% Missing bibliography output"):
+        return ""
+
+    items = split_bibliography_items(bibliography_text)
+    if not items:
+        return ""
+
+    lines = ['<section class="references" id="references">', "<h1>References</h1>", '<ol class="reference-list">']
+    for key, content in items:
+        normalized = emphasize_reference_title(normalize_reference_item_text(content))
+        if not normalized:
+            continue
+        safe_id = html.escape(f"ref-{key}", quote=True)
+        lines.append(f'  <li id="{safe_id}">{normalized}</li>')
+    lines.extend(["</ol>", "</section>"])
+    return "\n".join(lines)
 
 
 def run_command(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -861,6 +943,10 @@ def build_standalone_xhtml(body_html: str, title: str = "latex-epubifier preview
             "    .footnote { color: inherit; font-size: 0.95em; }",
             "    .abstract { padding: 0; background: transparent; border: none; }",
             "    .authors { margin-top: -0.15rem; color: inherit; font-size: 0.98rem; }",
+            "    .references { margin-top: 2.25rem; }",
+            "    .reference-list { padding-left: 1.4rem; }",
+            "    .reference-list li { margin: 0.7rem 0; }",
+            "    .ref-title { font-style: italic; }",
             "    @media (max-width: 640px) { body { padding: 1rem 0.875rem 2.5rem; } }",
             "  </style>",
             "</head>",
@@ -1038,6 +1124,18 @@ def build_epub_css(theme: str = "auto") -> str:
         "}",
         ".xref, .footnote, .authors {",
         "  color: inherit;",
+        "}",
+        ".references {",
+        "  margin-top: 2.25em;",
+        "}",
+        ".reference-list {",
+        "  padding-left: 1.4em;",
+        "}",
+        ".reference-list li {",
+        "  margin: 0.7em 0;",
+        "}",
+        ".ref-title {",
+        "  font-style: italic;",
         "}",
         ".footnote {",
         "  font-size: 0.95em;",
@@ -1351,6 +1449,7 @@ def run(
     preamble = extract_preamble(expanded)
     body = extract_body(expanded)
     sanitized = sanitize_latex(body)
+    references_html = build_references_html(expanded, main_tex)
     title = normalize_metadata_text(extract_command_arg(preamble, "title"))
     author = normalize_metadata_text(extract_command_arg(preamble, "author"))
     manifest = build_manifest(expanded, body, sanitized)
@@ -1376,6 +1475,11 @@ def run(
     front_matter = build_front_matter(title, author)
     if front_matter:
         html_ready = front_matter + "\n" + html_ready
+    if references_html:
+        html_ready = html_ready.rstrip() + "\n" + references_html + "\n"
+        manifest["references_count"] = len(split_bibliography_items(find_bibliography_text(expanded, main_tex)))
+    else:
+        manifest["references_count"] = 0
 
     output_dir.mkdir(parents=True, exist_ok=True)
     if debug:
@@ -1397,6 +1501,7 @@ def run(
         body=body,
         sanitized=sanitized,
         html_ready=html_ready,
+        references_html=references_html,
         title=title,
         author=author,
         manifest=manifest,
