@@ -15,6 +15,9 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .progress import ProgressReporter
+from .references import build_references_html, count_bibliography_items
+
 
 INPUT_RE = re.compile(r"\\input\{([^}]+)\}")
 INCLUDE_RE = re.compile(r"\\include\{([^}]+)\}")
@@ -78,22 +81,6 @@ class BlockNode:
     kind: str
     content: str = ""
     level: int = 0
-
-
-@dataclass
-class ProgressReporter:
-    enabled: bool = True
-
-    def step(self, current: int, total: int, message: str) -> None:
-        if not self.enabled:
-            return
-        print(f"[{current}/{total}] {message}", flush=True)
-
-    def item(self, category: str, current: int, total: int, detail: str = "") -> None:
-        if not self.enabled:
-            return
-        suffix = f": {detail}" if detail else ""
-        print(f"    {category} {current}/{total}{suffix}", flush=True)
 
 
 def is_supported_setup_line(stripped: str) -> bool:
@@ -329,13 +316,6 @@ def build_manifest(expanded: str, body: str, sanitized: str) -> dict:
     }
 
 
-def count_bibliography_items(expanded: str, main_tex: Path) -> int:
-    bibliography_text = find_bibliography_text(expanded, main_tex)
-    if not bibliography_text or bibliography_text.lstrip().startswith("% Missing bibliography output"):
-        return 0
-    return len(split_bibliography_items(bibliography_text))
-
-
 def build_front_matter(title: str, author: str) -> str:
     parts: list[str] = []
     if title:
@@ -343,49 +323,6 @@ def build_front_matter(title: str, author: str) -> str:
     if author:
         parts.append(f'<p class="authors">{html.escape(author)}</p>')
     return "\n".join(parts)
-
-
-def find_bibliography_text(expanded: str, main_tex: Path) -> str:
-    inline_match = re.search(
-        r"\\begin\{thebibliography\}.*?\\end\{thebibliography\}",
-        expanded,
-        flags=re.DOTALL,
-    )
-    if inline_match:
-        return inline_match.group(0)
-
-    bbl_path = main_tex.with_suffix(".bbl")
-    if bbl_path.exists():
-        return bbl_path.read_text(encoding="utf-8")
-
-    bibliography_match = BIBLIOGRAPHY_RE.search(expanded)
-    if bibliography_match:
-        return f"% Missing bibliography output for: {bibliography_match.group(1)}\n"
-    return ""
-
-
-def split_bibliography_items(bibliography_text: str) -> list[tuple[str, str]]:
-    matches = list(BIBITEM_RE.finditer(bibliography_text))
-    items: list[tuple[str, str]] = []
-    for index, match in enumerate(matches):
-        start = match.end()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(bibliography_text)
-        key = match.group(1).strip()
-        content = bibliography_text[start:end].strip()
-        if content:
-            items.append((key, content))
-    return items
-
-
-def normalize_reference_item_text(text: str) -> str:
-    cleaned = sanitize_latex(text)
-    cleaned = re.sub(r"\\begin\{[^}]+\}|\\end\{[^}]+\}", " ", cleaned)
-    cleaned = re.sub(r"\\[A-Za-z]+\*?(?:\[[^\]]*\])?", " ", cleaned)
-    cleaned = cleaned.replace("{", "").replace("}", "")
-    cleaned = normalize_inline_markup(cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    cleaned = re.sub(r"\s+([,.;:])", r"\1", cleaned)
-    return cleaned.strip()
 
 
 def render_citation_links(text: str) -> str:
@@ -401,37 +338,6 @@ def render_citation_links(text: str) -> str:
         return f"[{', '.join(links)}]"
 
     return re.sub(r"<cite data-keys='([^']+)'>\[[^]]*\]</cite>", replace, text)
-
-
-def emphasize_reference_title(reference_html: str) -> str:
-    match = re.search(r"([“\"'])(.+?)([”\"'])", reference_html)
-    if not match:
-        return reference_html
-    title = match.group(2).strip()
-    if len(title) < 8:
-        return reference_html
-    replacement = f'{match.group(1)}<em class="ref-title">{title}</em>{match.group(3)}'
-    return reference_html[: match.start()] + replacement + reference_html[match.end() :]
-
-
-def build_references_html(expanded: str, main_tex: Path) -> str:
-    bibliography_text = find_bibliography_text(expanded, main_tex)
-    if not bibliography_text or bibliography_text.lstrip().startswith("% Missing bibliography output"):
-        return ""
-
-    items = split_bibliography_items(bibliography_text)
-    if not items:
-        return ""
-
-    lines = ['<section class="references" id="references">', "<h1>References</h1>", '<ol class="reference-list">']
-    for key, content in items:
-        normalized = emphasize_reference_title(normalize_reference_item_text(content))
-        if not normalized:
-            continue
-        safe_id = html.escape(f"ref-{key}", quote=True)
-        lines.append(f'  <li id="{safe_id}">{normalized}</li>')
-    lines.extend(["</ol>", "</section>"])
-    return "\n".join(lines)
 
 
 def run_command(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -1551,7 +1457,14 @@ def run(
     preamble = extract_preamble(expanded)
     body = extract_body(expanded)
     sanitized = sanitize_latex(body)
-    references_html = build_references_html(expanded, main_tex)
+    references_html = build_references_html(
+        expanded,
+        main_tex,
+        BIBLIOGRAPHY_RE,
+        BIBITEM_RE,
+        sanitize_latex,
+        normalize_inline_markup,
+    )
     title = normalize_metadata_text(extract_command_arg(preamble, "title"))
     author = normalize_metadata_text(extract_command_arg(preamble, "author"))
     manifest = build_manifest(expanded, body, sanitized)
@@ -1559,7 +1472,12 @@ def run(
     macro_definitions = extract_macro_definitions(preamble)
     preamble_packages = extract_usepackage_lines(preamble)
     body_macro_setup = extract_body_macro_setup(body)
-    manifest["references_count"] = count_bibliography_items(expanded, main_tex)
+    manifest["references_count"] = count_bibliography_items(
+        expanded,
+        main_tex,
+        BIBLIOGRAPHY_RE,
+        BIBITEM_RE,
+    )
 
     if render_assets:
         if progress:
