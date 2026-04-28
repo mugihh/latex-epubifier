@@ -94,7 +94,22 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=Path("build"),
-        help="Directory for intermediate files",
+        help="Directory for generated output files",
+    )
+    parser.add_argument(
+        "--keep-preview",
+        action="store_true",
+        help="Write preview-standalone.xhtml for browser preview",
+    )
+    parser.add_argument(
+        "--keep-debug-artifacts",
+        action="store_true",
+        help="Write content.html, manifest.json, expanded.tex, body.tex, and sanitized.tex for debugging",
+    )
+    parser.add_argument(
+        "--keep-epub-workdir",
+        action="store_true",
+        help="Keep the unpacked EPUB staging directory at output-dir/epub",
     )
     parser.add_argument(
         "--render-assets",
@@ -1212,14 +1227,20 @@ def add_epub_asset(manifest_lines: list[str], source: Path, href: str, item_id: 
     manifest_lines.append(
         f'    <item id="{html.escape(item_id)}" href="{html.escape(href)}" media-type="{html.escape(media_type)}" />'
     )
-def package_epub(output_dir: Path, body_html: str, title: str, author: str, theme: str = "auto") -> Path:
+def package_epub(
+    output_dir: Path,
+    epub_root: Path,
+    body_html: str,
+    title: str,
+    author: str,
+    theme: str = "auto",
+) -> Path:
     identifier = f"urn:uuid:{hashlib.sha1((title + author + body_html).encode('utf-8')).hexdigest()}"
     chapter_xhtml = build_epub_chapter_xhtml(body_html, title, author)
     nav_xhtml = build_epub_nav_xhtml(title)
     validate_xhtml(chapter_xhtml)
     validate_xhtml(nav_xhtml)
 
-    epub_root = output_dir / "epub"
     oebps_dir = epub_root / "OEBPS"
     meta_inf_dir = epub_root / "META-INF"
     text_dir = oebps_dir / "text"
@@ -1323,6 +1344,8 @@ def run(
     output_dir: Path,
     render_assets: bool = False,
     math_theme: str = "light",
+    keep_preview: bool = False,
+    keep_debug_artifacts: bool = False,
 ) -> BuildArtifacts:
     expanded = expand_inputs(main_tex)
     preamble = extract_preamble(expanded)
@@ -1355,18 +1378,20 @@ def run(
         html_ready = front_matter + "\n" + html_ready
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "expanded.tex").write_text(expanded, encoding="utf-8")
-    (output_dir / "body.tex").write_text(body, encoding="utf-8")
-    (output_dir / "sanitized.tex").write_text(sanitized, encoding="utf-8")
-    (output_dir / "content.html").write_text(html_ready, encoding="utf-8")
-    (output_dir / "preview-standalone.xhtml").write_text(
-        build_standalone_xhtml(html_ready, title=title or "latex-epubifier preview"),
-        encoding="utf-8",
-    )
-    (output_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    if keep_debug_artifacts:
+        (output_dir / "expanded.tex").write_text(expanded, encoding="utf-8")
+        (output_dir / "body.tex").write_text(body, encoding="utf-8")
+        (output_dir / "sanitized.tex").write_text(sanitized, encoding="utf-8")
+        (output_dir / "content.html").write_text(html_ready, encoding="utf-8")
+        (output_dir / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    if keep_preview:
+        (output_dir / "preview-standalone.xhtml").write_text(
+            build_standalone_xhtml(html_ready, title=title or "latex-epubifier preview"),
+            encoding="utf-8",
+        )
 
     return BuildArtifacts(
         expanded=expanded,
@@ -1387,21 +1412,34 @@ def main() -> int:
         args.output_dir,
         render_assets=args.render_assets,
         math_theme=math_theme,
+        keep_preview=args.keep_preview,
+        keep_debug_artifacts=args.keep_debug_artifacts,
     )
     if args.build_epub:
-        epub_path = package_epub(
-            args.output_dir,
-            artifacts.html_ready,
-            artifacts.title,
-            artifacts.author,
-            theme=args.epub_theme,
-        )
-        artifacts.manifest["epub"] = str(epub_path)
-        if args.validate_epub:
-            validation = validate_epub(epub_path, args.output_dir / "epub")
-            artifacts.manifest["epub_validation"] = validation
-            if not validation["ok"]:
-                print(json.dumps(artifacts.manifest, indent=2, ensure_ascii=False))
-                return 1
-    print(json.dumps(artifacts.manifest, indent=2, ensure_ascii=False))
+        temp_epub_dir: Path | None = None
+        epub_root = args.output_dir / "epub"
+        if not args.keep_epub_workdir:
+            temp_epub_dir = Path(tempfile.mkdtemp(prefix="latex-epubifier-epub-"))
+            epub_root = temp_epub_dir / "epub"
+        try:
+            epub_path = package_epub(
+                args.output_dir,
+                epub_root,
+                artifacts.html_ready,
+                artifacts.title,
+                artifacts.author,
+                theme=args.epub_theme,
+            )
+            artifacts.manifest["epub"] = str(epub_path)
+            if args.validate_epub:
+                validation = validate_epub(epub_path, epub_root)
+                artifacts.manifest["epub_validation"] = validation
+                if not validation["ok"]:
+                    print(json.dumps(artifacts.manifest, indent=2, ensure_ascii=False))
+                    return 1
+        finally:
+            if temp_epub_dir is not None:
+                shutil.rmtree(temp_epub_dir, ignore_errors=True)
+    if args.keep_debug_artifacts:
+        print(json.dumps(artifacts.manifest, indent=2, ensure_ascii=False))
     return 0

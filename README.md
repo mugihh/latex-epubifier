@@ -12,10 +12,11 @@ python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build --render-
 
 This generates:
 
-- normalized intermediate files
 - rendered math / figure / table assets
-- XHTML preview files
 - a validated EPUB
+
+Add `--keep-preview` if you want a browser preview file.
+Add `--keep-debug-artifacts` if you want the normalized `.tex` files plus HTML/manifest debugging outputs.
 
 ## Common commands
 
@@ -35,13 +36,24 @@ python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build-dark --re
 
 Typical output files:
 
+- with `--build-epub`: `book.epub`
+- without `--build-epub`: no final file is written unless you ask for preview/debug outputs
+
+Optional preview file with `--keep-preview`:
+
+- `preview-standalone.xhtml`
+
+Optional debugging files with `--keep-debug-artifacts`:
+
+- `content.html`
+- `manifest.json`
 - `expanded.tex`
 - `body.tex`
 - `sanitized.tex`
-- `content.html`
-- `preview-standalone.xhtml`
-- `manifest.json`
-- `book.epub`
+
+Optional EPUB staging directory with `--keep-epub-workdir`:
+
+- `epub/`
 
 Asset folders:
 
@@ -85,6 +97,9 @@ This version:
 - `--render-assets`
 - `--build-epub`
 - `--validate-epub`
+- `--keep-preview`
+- `--keep-debug-artifacts`
+- `--keep-epub-workdir`
 - `--epub-theme auto|light|dark`
 
 ## Validation
