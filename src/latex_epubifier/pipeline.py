@@ -15,11 +15,20 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .parsing import (
+    expand_inputs,
+    extract_body,
+    extract_body_macro_setup,
+    extract_command_arg,
+    extract_local_table_setup,
+    extract_macro_definitions,
+    extract_preamble,
+    extract_usepackage_lines,
+)
 from .progress import ProgressReporter
 from .references import build_references_html, count_bibliography_items
 from .utils import (
     cleanup_non_debug_outputs,
-    ensure_tex_suffix,
     run_command,
     slug_for_content,
 )
@@ -89,17 +98,6 @@ class BlockNode:
     level: int = 0
 
 
-def is_supported_setup_line(stripped: str) -> bool:
-    return stripped.startswith(
-        (
-            r"\definecolor",
-            r"\newcommand",
-            r"\renewcommand",
-            r"\newcolumntype",
-        )
-    )
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Normalize a LaTeX project for EPUB conversion.")
     parser.add_argument("main_tex", type=Path, help="Path to the main .tex file")
@@ -126,65 +124,6 @@ def parse_args() -> argparse.Namespace:
         help="EPUB theme mode. 'auto' leaves text colors neutral, 'dark' emits white math assets and dark-oriented CSS.",
     )
     return parser.parse_args()
-
-
-def expand_inputs(tex_path: Path, seen: set[Path] | None = None) -> str:
-    seen = seen or set()
-    tex_path = tex_path.resolve()
-    if tex_path in seen:
-        return f"% Skipped recursive input: {tex_path}\n"
-    seen.add(tex_path)
-
-    text = tex_path.read_text(encoding="utf-8")
-
-    def replace(match: re.Match[str]) -> str:
-        rel = ensure_tex_suffix(match.group(1).strip())
-        child = (tex_path.parent / rel).resolve()
-        if not child.exists():
-            return f"% Missing input: {rel}\n"
-        return expand_inputs(child, seen)
-
-    expanded = INPUT_RE.sub(replace, text)
-    return INCLUDE_RE.sub(replace, expanded)
-
-
-def extract_body(text: str) -> str:
-    start = text.find(r"\begin{document}")
-    end = text.rfind(r"\end{document}")
-    if start == -1 or end == -1 or start >= end:
-        return text
-    start += len(r"\begin{document}")
-    return text[start:end].strip() + "\n"
-
-
-def extract_preamble(text: str) -> str:
-    start = text.find(r"\begin{document}")
-    if start == -1:
-        return text
-    return text[:start]
-
-
-def extract_command_arg(text: str, command: str) -> str:
-    match = re.search(rf"\\{command}\s*\{{", text, flags=re.DOTALL)
-    if not match:
-        return ""
-    start = match.end() - 1
-    depth = 0
-    chars: list[str] = []
-    for ch in text[start:]:
-        if ch == "{":
-            depth += 1
-            if depth > 1:
-                chars.append(ch)
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-            chars.append(ch)
-        else:
-            if depth >= 1:
-                chars.append(ch)
-    return "".join(chars).strip()
 
 
 def unescape_latex_text(text: str) -> str:
@@ -340,58 +279,6 @@ def render_citation_links(text: str) -> str:
         return f"[{', '.join(links)}]"
 
     return re.sub(r"<cite data-keys='([^']+)'>\[[^]]*\]</cite>", replace, text)
-
-
-def extract_macro_definitions(preamble: str) -> str:
-    matches: list[str] = []
-    for pattern in MACRO_PATTERNS:
-        matches.extend(re.findall(pattern, preamble, flags=re.DOTALL))
-    lines = []
-    for line in preamble.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(r"\newcommand") or stripped.startswith(r"\renewcommand"):
-            lines.append(stripped)
-    return "\n".join(lines) + ("\n" if lines else "")
-
-
-def extract_usepackage_lines(preamble: str) -> str:
-    lines = []
-    for line in USEPACKAGE_LINE_RE.findall(preamble):
-        if "{acl}" in line:
-            continue
-        lines.append(line)
-    return "\n".join(lines) + ("\n" if lines else "")
-
-
-def extract_local_table_setup(text: str, table_block: str) -> str:
-    start = text.find(table_block)
-    if start == -1:
-        return ""
-    prefix = text[:start].rstrip()
-    lines = prefix.splitlines()
-    collected: list[str] = []
-    for line in reversed(lines):
-        stripped = line.strip()
-        if not stripped:
-            if collected:
-                break
-            continue
-        if is_supported_setup_line(stripped):
-            collected.append(stripped)
-            continue
-        if collected:
-            break
-    collected.reverse()
-    return "\n".join(collected) + ("\n" if collected else "")
-
-
-def extract_body_macro_setup(text: str) -> str:
-    lines: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if is_supported_setup_line(stripped):
-            lines.append(stripped)
-    return "\n".join(lines) + ("\n" if lines else "")
 
 
 def normalize_math_snippet(latex_snippet: str, display_mode: bool) -> str:
@@ -1417,7 +1304,7 @@ def run(
 ) -> BuildArtifacts:
     if progress:
         progress.step(1, 6, "Expanding LaTeX inputs")
-    expanded = expand_inputs(main_tex)
+    expanded = expand_inputs(main_tex, INPUT_RE, INCLUDE_RE)
     if progress:
         progress.step(2, 6, "Parsing document structure and bibliography")
     preamble = extract_preamble(expanded)
@@ -1435,8 +1322,8 @@ def run(
     author = normalize_metadata_text(extract_command_arg(preamble, "author"))
     manifest = build_manifest(expanded, body, sanitized)
     html_ready = build_html_ready(sanitized)
-    macro_definitions = extract_macro_definitions(preamble)
-    preamble_packages = extract_usepackage_lines(preamble)
+    macro_definitions = extract_macro_definitions(preamble, MACRO_PATTERNS)
+    preamble_packages = extract_usepackage_lines(preamble, USEPACKAGE_LINE_RE)
     body_macro_setup = extract_body_macro_setup(body)
     manifest["references_count"] = count_bibliography_items(
         expanded,
