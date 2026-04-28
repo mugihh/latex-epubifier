@@ -2,29 +2,51 @@
 
 Turn LaTeX papers into e-reader-friendly XHTML and EPUB.
 
-## How to use
+## Quick Start
 
-Basic usage:
+For most papers, run this from the repository folder:
 
 ```bash
-python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build --validate-epub
+python3 convert.py path/to/main.tex
 ```
 
-This generates:
+For example:
 
-- `book.epub`
+```bash
+python3 convert.py arXiv-2410.03959v1/main.tex
+```
 
-Add `--debug` if you want to keep all intermediate files, rendered assets, and EPUB staging files.
+The EPUB will be created at:
+
+- `build/book.epub`
+
+If you are using a dark-mode oriented e-reader and math looks too dark, try:
+
+```bash
+python3 convert.py path/to/main.tex --dark-math
+```
+
+If something looks wrong and you want troubleshooting files, add:
+
+```bash
+python3 convert.py path/to/main.tex --debug
+```
 
 ## Common commands
 
-Build a normal EPUB:
+Beginner-friendly command:
+
+```bash
+python3 convert.py path/to/main.tex
+```
+
+Advanced module command:
 
 ```bash
 python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build --validate-epub
 ```
 
-Build a dark-math EPUB:
+Advanced dark-math command:
 
 ```bash
 python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build-dark --validate-epub --epub-theme dark
@@ -80,6 +102,8 @@ This version:
 
 ## CLI flags
 
+- `convert.py`: `--dark-math`
+- `convert.py`: `--skip-validation`
 - `--validate-epub`
 - `--debug`
 - `--epub-theme auto|light|dark`

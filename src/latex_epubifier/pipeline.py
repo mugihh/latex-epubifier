@@ -93,7 +93,7 @@ class BuildArtifacts:
     manifest: dict
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Normalize a LaTeX project for EPUB conversion.")
     parser.add_argument("main_tex", type=Path, help="Path to the main .tex file")
     parser.add_argument(
@@ -118,7 +118,7 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="EPUB theme mode. 'auto' leaves text colors neutral, 'dark' emits white math assets and dark-oriented CSS.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def unescape_latex_text(text: str) -> str:
@@ -430,8 +430,8 @@ def run(
     )
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     math_theme = "dark" if args.epub_theme == "dark" else "auto"
     progress = ProgressReporter()
     artifacts = run(
