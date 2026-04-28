@@ -33,6 +33,22 @@ def build_front_matter(title: str, author: str) -> str:
     return "\n".join(parts)
 
 
+def build_conversion_notice(repo_url: str) -> str:
+    safe_url = html.escape(repo_url, quote=True)
+    safe_label = html.escape(repo_url)
+    return "\n".join(
+        [
+            '<section class="conversion-notice" id="conversion-notice">',
+            "<h1>Conversion Notice</h1>",
+            "<p>This EPUB was generated from LaTeX source using latex-epubifier.</p>",
+            "<p>This tool only converts document format. Copyright remains with the original author(s) or rights holder(s).</p>",
+            "<p>This conversion does not grant redistribution, republication, or other reuse rights. Any sharing or reuse must comply with the original work's license or the rights holder's permission.</p>",
+            f'<p>Tool repository: <a href="{safe_url}">{safe_label}</a></p>',
+            "</section>",
+        ]
+    )
+
+
 def escape_table_placeholder_captions(text: str) -> str:
     def replace(match: re.Match[str]) -> str:
         prefix = match.group(1)
@@ -215,6 +231,7 @@ def build_standalone_xhtml(body_html: str, title: str = "latex-epubifier preview
             "    .abstract { padding: 0; background: transparent; border: none; }",
             "    .authors { margin-top: -0.15rem; color: inherit; font-size: 0.98rem; }",
             "    .references { margin-top: 2.25rem; }",
+            "    .conversion-notice { margin-top: 2.25rem; color: #444444; font-size: 0.95rem; }",
             "    .reference-list { padding-left: 1.4rem; }",
             "    .reference-list li { margin: 0.7rem 0; }",
             "    .ref-title { font-style: italic; }",

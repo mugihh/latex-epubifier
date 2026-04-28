@@ -13,6 +13,7 @@ from pathlib import Path
 from .assets import render_assets_and_reinsert
 from .epub import package_epub, validate_epub
 from .html_render import (
+    build_conversion_notice,
     build_front_matter,
     build_html_ready,
     build_standalone_xhtml,
@@ -76,6 +77,8 @@ STYLE_COMMAND_PATTERNS = [
     r"\\fbox\{%",
     r"\\parbox\{[^}]+\}\{%",
 ]
+
+REPO_URL = "https://github.com/mugihh/latex-epubifier"
 
 
 @dataclass
@@ -396,6 +399,7 @@ def run(
         html_ready = front_matter + "\n" + html_ready
     if references_html:
         html_ready = html_ready.rstrip() + "\n" + references_html + "\n"
+    html_ready = html_ready.rstrip() + "\n" + build_conversion_notice(REPO_URL) + "\n"
 
     if progress:
         progress.step(5, 6, "Writing output files")

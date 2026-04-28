@@ -94,3 +94,21 @@ The built-in validation checks:
 - referenced asset existence
 
 If `epubcheck` is installed, it is used automatically during validation.
+
+## Copyright and Usage
+
+This tool converts LaTeX source into EPUB-friendly HTML and EPUB output. It does not transfer, replace, or grant any copyright in the original work.
+
+When you convert a paper with this tool:
+
+- the copyright of the paper remains with the original author(s), publisher, or other rights holder
+- you are responsible for making sure you have permission to convert, store, read, share, or redistribute that content
+- converting a document with this tool does not grant republication, distribution, or commercial-use rights
+
+The generated EPUB is intended as a personal reading format conversion unless the original work's license or the rights holder's permission allows broader use.
+
+## Project License
+
+This repository is licensed under the MIT License. See [LICENSE](/Users/chyu/Desktop/code/latex-epubifier/LICENSE).
+
+The MIT License applies to the source code of this tool only. It does not change the copyright, license, or redistribution status of any paper or other source material converted with it.
