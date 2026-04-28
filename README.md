@@ -7,59 +7,45 @@ Turn LaTeX papers into e-reader-friendly XHTML and EPUB.
 Basic usage:
 
 ```bash
-python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build --render-assets --build-epub --validate-epub
+python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build --validate-epub
 ```
 
 This generates:
 
-- rendered math / figure / table assets
-- a validated EPUB
+- `book.epub`
 
-Add `--keep-preview` if you want a browser preview file.
-Add `--keep-debug-artifacts` if you want the normalized `.tex` files plus HTML/manifest debugging outputs.
+Add `--debug` if you want to keep all intermediate files, rendered assets, and EPUB staging files.
 
 ## Common commands
 
 Build a normal EPUB:
 
 ```bash
-python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build --render-assets --build-epub --validate-epub
+python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build --validate-epub
 ```
 
 Build a dark-math EPUB:
 
 ```bash
-python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build-dark --render-assets --build-epub --validate-epub --epub-theme dark
+python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build-dark --validate-epub --epub-theme dark
 ```
 
 ## Output files
 
 Typical output files:
 
-- with `--build-epub`: `book.epub`
-- without `--build-epub`: no final file is written unless you ask for preview/debug outputs
+- default: `book.epub`
 
-Optional preview file with `--keep-preview`:
-
-- `preview-standalone.xhtml`
-
-Optional debugging files with `--keep-debug-artifacts`:
+Files kept with `--debug`:
 
 - `content.html`
 - `manifest.json`
+- `preview-standalone.xhtml`
 - `expanded.tex`
 - `body.tex`
 - `sanitized.tex`
-
-Optional EPUB staging directory with `--keep-epub-workdir`:
-
+- `assets/`
 - `epub/`
-
-Asset folders:
-
-- `assets/math/`
-- `assets/figures/`
-- `assets/tables/`
 
 ## Supported features
 
@@ -83,7 +69,7 @@ Recommended default:
 If your e-reader does not recolor math images correctly in dark mode, build the dark-math version instead:
 
 ```bash
-python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build-dark --render-assets --build-epub --validate-epub --epub-theme dark
+python3 -m src.latex_epubifier.cli path/to/main.tex --output-dir build-dark --validate-epub --epub-theme dark
 ```
 
 This version:
@@ -94,12 +80,8 @@ This version:
 
 ## CLI flags
 
-- `--render-assets`
-- `--build-epub`
 - `--validate-epub`
-- `--keep-preview`
-- `--keep-debug-artifacts`
-- `--keep-epub-workdir`
+- `--debug`
 - `--epub-theme auto|light|dark`
 
 ## Validation

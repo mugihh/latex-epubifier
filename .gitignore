@@ -12,6 +12,7 @@ env/
 
 build*/
 arXiv-*/
+tmp*/
 
 *.epub
 *.log

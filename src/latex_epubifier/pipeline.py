@@ -97,29 +97,9 @@ def parse_args() -> argparse.Namespace:
         help="Directory for generated output files",
     )
     parser.add_argument(
-        "--keep-preview",
+        "--debug",
         action="store_true",
-        help="Write preview-standalone.xhtml for browser preview",
-    )
-    parser.add_argument(
-        "--keep-debug-artifacts",
-        action="store_true",
-        help="Write content.html, manifest.json, expanded.tex, body.tex, and sanitized.tex for debugging",
-    )
-    parser.add_argument(
-        "--keep-epub-workdir",
-        action="store_true",
-        help="Keep the unpacked EPUB staging directory at output-dir/epub",
-    )
-    parser.add_argument(
-        "--render-assets",
-        action="store_true",
-        help="Render math to SVG and PDF figures to PNG, then reinsert them into HTML-ready output",
-    )
-    parser.add_argument(
-        "--build-epub",
-        action="store_true",
-        help="Package the validated XHTML output into an EPUB file",
+        help="Keep all intermediate files, rendered assets, and EPUB staging files",
     )
     parser.add_argument(
         "--validate-epub",
@@ -743,7 +723,7 @@ def parse_figure_block(block: str) -> str:
 STRUCTURAL_TOKEN_RE = re.compile(
     r"\\begin\{abstract\}.*?\\end\{abstract\}"
     r"|\\begin\{figure\*?\}(?:\[[^\]]*\])?.*?\\end\{figure\*?\}"
-    r"|\\(?:section|subsection|subsubsection)\{.*?\}"
+    r"|\\(?:section|subsection|subsubsection)\*?\{.*?\}"
     r"|<latex-epub-block-math\s+[^>]*></latex-epub-block-math>"
     r"|<latex-epub-table\s+[^>]*></latex-epub-table>"
     r"|<prompt-block>.*?</prompt-block>",
@@ -787,7 +767,7 @@ def parse_blocks(text: str) -> list[BlockNode]:
             content = chunk.removeprefix("<prompt-block>").removesuffix("</prompt-block>").strip()
             blocks.append(BlockNode(kind="prompt", content=content))
             continue
-        heading_match = re.fullmatch(r"\\(section|subsection|subsubsection)\{(.*)\}", chunk, flags=re.DOTALL)
+        heading_match = re.fullmatch(r"\\(section|subsection|subsubsection)\*?\{(.*)\}", chunk, flags=re.DOTALL)
         if heading_match:
             level_map = {"section": 1, "subsection": 2, "subsubsection": 3}
             blocks.append(
@@ -1339,13 +1319,33 @@ def render_assets_and_reinsert(
     return build_html_ready(working)
 
 
+def remove_output_path(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    elif path.exists():
+        path.unlink()
+
+
+def cleanup_non_debug_outputs(output_dir: Path) -> None:
+    for name in [
+        "expanded.tex",
+        "body.tex",
+        "sanitized.tex",
+        "content.html",
+        "preview-standalone.xhtml",
+        "manifest.json",
+        "assets",
+        "epub",
+    ]:
+        remove_output_path(output_dir / name)
+
+
 def run(
     main_tex: Path,
     output_dir: Path,
-    render_assets: bool = False,
+    render_assets: bool = True,
     math_theme: str = "light",
-    keep_preview: bool = False,
-    keep_debug_artifacts: bool = False,
+    debug: bool = False,
 ) -> BuildArtifacts:
     expanded = expand_inputs(main_tex)
     preamble = extract_preamble(expanded)
@@ -1378,7 +1378,7 @@ def run(
         html_ready = front_matter + "\n" + html_ready
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    if keep_debug_artifacts:
+    if debug:
         (output_dir / "expanded.tex").write_text(expanded, encoding="utf-8")
         (output_dir / "body.tex").write_text(body, encoding="utf-8")
         (output_dir / "sanitized.tex").write_text(sanitized, encoding="utf-8")
@@ -1387,7 +1387,6 @@ def run(
             json.dumps(manifest, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-    if keep_preview:
         (output_dir / "preview-standalone.xhtml").write_text(
             build_standalone_xhtml(html_ready, title=title or "latex-epubifier preview"),
             encoding="utf-8",
@@ -1410,36 +1409,36 @@ def main() -> int:
     artifacts = run(
         args.main_tex,
         args.output_dir,
-        render_assets=args.render_assets,
+        render_assets=True,
         math_theme=math_theme,
-        keep_preview=args.keep_preview,
-        keep_debug_artifacts=args.keep_debug_artifacts,
+        debug=args.debug,
     )
-    if args.build_epub:
-        temp_epub_dir: Path | None = None
-        epub_root = args.output_dir / "epub"
-        if not args.keep_epub_workdir:
-            temp_epub_dir = Path(tempfile.mkdtemp(prefix="latex-epubifier-epub-"))
-            epub_root = temp_epub_dir / "epub"
-        try:
-            epub_path = package_epub(
-                args.output_dir,
-                epub_root,
-                artifacts.html_ready,
-                artifacts.title,
-                artifacts.author,
-                theme=args.epub_theme,
-            )
-            artifacts.manifest["epub"] = str(epub_path)
-            if args.validate_epub:
-                validation = validate_epub(epub_path, epub_root)
-                artifacts.manifest["epub_validation"] = validation
-                if not validation["ok"]:
-                    print(json.dumps(artifacts.manifest, indent=2, ensure_ascii=False))
-                    return 1
-        finally:
-            if temp_epub_dir is not None:
-                shutil.rmtree(temp_epub_dir, ignore_errors=True)
-    if args.keep_debug_artifacts:
+    temp_epub_dir: Path | None = None
+    epub_root = args.output_dir / "epub"
+    if not args.debug:
+        temp_epub_dir = Path(tempfile.mkdtemp(prefix="latex-epubifier-epub-"))
+        epub_root = temp_epub_dir / "epub"
+    try:
+        epub_path = package_epub(
+            args.output_dir,
+            epub_root,
+            artifacts.html_ready,
+            artifacts.title,
+            artifacts.author,
+            theme=args.epub_theme,
+        )
+        artifacts.manifest["epub"] = str(epub_path)
+        if args.validate_epub:
+            validation = validate_epub(epub_path, epub_root)
+            artifacts.manifest["epub_validation"] = validation
+            if not validation["ok"]:
+                print(json.dumps(artifacts.manifest, indent=2, ensure_ascii=False))
+                return 1
+    finally:
+        if temp_epub_dir is not None:
+            shutil.rmtree(temp_epub_dir, ignore_errors=True)
+    if args.debug:
         print(json.dumps(artifacts.manifest, indent=2, ensure_ascii=False))
+    else:
+        cleanup_non_debug_outputs(args.output_dir)
     return 0
