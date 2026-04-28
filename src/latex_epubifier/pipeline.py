@@ -388,6 +388,21 @@ def normalize_reference_item_text(text: str) -> str:
     return cleaned.strip()
 
 
+def render_citation_links(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        raw_keys = match.group(1)
+        keys = [key.strip() for key in raw_keys.split(",") if key.strip()]
+        if not keys:
+            return "[]"
+        links = [
+            f'<a class="citation-link" href="#{html.escape(f"ref-{key}", quote=True)}">{html.escape(key)}</a>'
+            for key in keys
+        ]
+        return f"[{', '.join(links)}]"
+
+    return re.sub(r"<cite data-keys='([^']+)'>\[[^]]*\]</cite>", replace, text)
+
+
 def emphasize_reference_title(reference_html: str) -> str:
     match = re.search(r"([“\"'])(.+?)([”\"'])", reference_html)
     if not match:
@@ -821,6 +836,7 @@ def normalize_references(text: str) -> str:
 def normalize_inline_markup(text: str) -> str:
     normalized = text
     normalized = re.sub(r"\\footnote\{([^}]+)\}", r' <span class="footnote">[\1]</span>', normalized)
+    normalized = render_citation_links(normalized)
     normalized = normalize_references(normalized)
     normalized = unescape_latex_text(normalized)
     normalized = normalized.replace("&", "&amp;")
@@ -1004,6 +1020,8 @@ def build_standalone_xhtml(body_html: str, title: str = "latex-epubifier preview
             "    pre.prompt-block { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; background: transparent; border: none; padding: 0; margin: 1em 0; font-size: 0.92rem; line-height: 1.45; }",
             "    .table-figure img { background: white; }",
             "    .xref { color: inherit; }",
+            "    .citation-link { color: #555555; text-decoration-line: underline; text-decoration-style: dashed; text-decoration-color: #8a8a8a; text-underline-offset: 0.12em; }",
+            "    @media (prefers-color-scheme: dark) { .citation-link { color: #c8c8c8; text-decoration-color: #a8a8a8; } }",
             "    .footnote { color: inherit; font-size: 0.95em; }",
             "    .abstract { padding: 0; background: transparent; border: none; }",
             "    .authors { margin-top: -0.15rem; color: inherit; font-size: 0.98rem; }",
@@ -1189,6 +1207,13 @@ def build_epub_css(theme: str = "auto") -> str:
         ".xref, .footnote, .authors {",
         "  color: inherit;",
         "}",
+        ".citation-link {",
+        "  color: #555555;",
+        "  text-decoration-line: underline;",
+        "  text-decoration-style: dashed;",
+        "  text-decoration-color: #8a8a8a;",
+        "  text-underline-offset: 0.12em;",
+        "}",
         ".references {",
         "  margin-top: 2.25em;",
         "}",
@@ -1206,6 +1231,12 @@ def build_epub_css(theme: str = "auto") -> str:
         "}",
         ".abstract {",
         "  padding: 0;",
+        "}",
+        "@media (prefers-color-scheme: dark) {",
+        "  .citation-link {",
+        "    color: #c8c8c8;",
+        "    text-decoration-color: #a8a8a8;",
+        "  }",
         "}",
     ]
     lines.append("")
