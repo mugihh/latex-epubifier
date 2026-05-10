@@ -16,6 +16,7 @@ class BlockNode:
 STRUCTURAL_TOKEN_RE = re.compile(
     r"\\begin\{abstract\}.*?\\end\{abstract\}"
     r"|\\begin\{figure\*?\}(?:\[[^\]]*\])?.*?\\end\{figure\*?\}"
+    r"|\\begin\{Dialogue\}.*?\\end\{Dialogue\}%?"
     r"|\\(?:section|subsection|subsubsection)\*?\{.*?\}"
     r"|<latex-epub-block-math\s+[^>]*></latex-epub-block-math>"
     r"|<latex-epub-table\s+[^>]*></latex-epub-table>"
@@ -102,6 +103,9 @@ def parse_blocks(text: str) -> list[BlockNode]:
             continue
         if chunk.startswith(r"\begin{figure"):
             blocks.append(BlockNode(kind="figure", content=chunk))
+            continue
+        if chunk.startswith(r"\begin{Dialogue}"):
+            blocks.append(BlockNode(kind="prompt", content=chunk))
             continue
         if chunk.startswith("<latex-epub-block-math"):
             blocks.append(BlockNode(kind="display_math", content=chunk))

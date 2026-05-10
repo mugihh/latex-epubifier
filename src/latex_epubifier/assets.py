@@ -209,7 +209,7 @@ def replace_display_math_with_images(
         manifest.setdefault("rendered_display_math", []).append(
             {"latex": content, "asset": f"assets/math/{asset_name}.svg"}
         )
-        alt = html.escape(content, quote=True)
+        alt = html.escape(content, quote=True).replace("$", "&#36;")
         return f'\n<latex-epub-block-math src="assets/math/{asset_name}.svg" alt="{alt}"></latex-epub-block-math>\n'
 
     return display_math_re.sub(replace, text)

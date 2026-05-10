@@ -193,7 +193,7 @@ def replace_texttt_blocks(text: str) -> str:
         if "\n" in body:
             result.append(f"<prompt-block>{body}</prompt-block>")
         else:
-            result.append(f"<code>{body}</code>")
+            result.append(f"<code>{html.escape(body)}</code>")
         i = j
     return "".join(result)
 
@@ -312,10 +312,15 @@ def normalize_inline_markup(text: str) -> str:
 
 def normalize_prompt_block(text: str) -> str:
     cleaned = text.strip()
+    cleaned = re.sub(r"\\begin\{Dialogue\}", "", cleaned)
+    cleaned = re.sub(r"\\end\{Dialogue\}%?", "", cleaned)
+    cleaned = re.sub(r"\\(?:AgentDo|AgentSay|Partner|AgentAction|MetaAction)\{", "", cleaned)
     cleaned = re.sub(r"\\begin\{itemize\}", "", cleaned)
     cleaned = re.sub(r"\\end\{itemize\}", "", cleaned)
     cleaned = re.sub(r"\\item\s+", "- ", cleaned)
     cleaned = re.sub(r"\\(?:textbf|textit|emph)\{([^}]*)\}", r"\1", cleaned)
+    cleaned = re.sub(r"\\newline\b", "\n", cleaned)
+    cleaned = re.sub(r"\\_", "_", cleaned)
     cleaned = re.sub(r"\\{2,}", "\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
