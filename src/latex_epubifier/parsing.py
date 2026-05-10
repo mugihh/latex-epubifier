@@ -82,14 +82,25 @@ def extract_command_arg(text: str, command: str) -> str:
 
 
 def extract_macro_definitions(preamble: str, macro_patterns: list[str]) -> str:
-    matches: list[str] = []
-    for pattern in macro_patterns:
-        matches.extend(re.findall(pattern, preamble, flags=re.DOTALL))
+    del macro_patterns
     lines = []
-    for line in preamble.splitlines():
+    preamble_lines = preamble.splitlines()
+    index = 0
+    while index < len(preamble_lines):
+        line = preamble_lines[index]
         stripped = line.strip()
         if stripped.startswith(r"\newcommand") or stripped.startswith(r"\renewcommand"):
-            lines.append(stripped)
+            collected = [stripped]
+            balance = stripped.count("{") - stripped.count("}")
+            while balance > 0 and index + 1 < len(preamble_lines):
+                index += 1
+                next_line = preamble_lines[index].strip()
+                collected.append(next_line)
+                balance += next_line.count("{") - next_line.count("}")
+            definition = "\n".join(collected)
+            if balance == 0 and r"\@" not in definition:
+                lines.append(definition)
+        index += 1
     return "\n".join(lines) + ("\n" if lines else "")
 
 

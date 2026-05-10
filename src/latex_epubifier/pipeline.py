@@ -42,11 +42,16 @@ INCLUDEGRAPHICS_RE = re.compile(
 )
 INLINE_MATH_RE = re.compile(r"(?<!\\)\$(.+?)(?<!\\)\$", re.DOTALL)
 DISPLAY_MATH_RE = re.compile(
-    r"\\\[(.*?)\\\]|\\begin\{equation\*?\}(.*?)\\end\{equation\*?\}|\\begin\{align\*?\}(.*?)\\end\{align\*?\}",
-    re.DOTALL,
+    r"^[ \t]*\\\[(.*?)^[ \t]*\\\]"
+    r"|^[ \t]*\\begin\{equation\*?\}(.*?)^[ \t]*\\end\{equation\*?\}"
+    r"|^[ \t]*\\begin\{align\*?\}(.*?)^[ \t]*\\end\{align\*?\}",
+    re.DOTALL | re.MULTILINE,
 )
 USEPACKAGE_LINE_RE = re.compile(r"^\\usepackage(?:\[[^\]]*\])?\{[^}]+\}\s*$", re.MULTILINE)
-TABLE_BLOCK_RE = re.compile(r"\\begin\{table\*?\}.*?\\end\{table\*?\}", re.DOTALL)
+TABLE_BLOCK_RE = re.compile(
+    r"^[ \t]*\\begin\{table\*?\}.*?^[ \t]*\\end\{table\*?\}",
+    re.DOTALL | re.MULTILINE,
+)
 BIBLIOGRAPHY_RE = re.compile(r"\\bibliography\{([^}]+)\}")
 BIBITEM_RE = re.compile(r"\\bibitem(?:\[[^\]]*\])?\{([^}]+)\}")
 

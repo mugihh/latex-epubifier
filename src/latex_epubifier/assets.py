@@ -74,7 +74,19 @@ def render_math_to_svg(
             ),
             encoding="utf-8",
         )
-        run_command(["pdflatex", "-interaction=nonstopmode", "math.tex"], cwd=tmp)
+        proc = subprocess.run(
+            ["pdflatex", "-interaction=nonstopmode", "math.tex"],
+            cwd=str(tmp),
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0 and not (tmp / "math.pdf").exists():
+            raise subprocess.CalledProcessError(
+                proc.returncode,
+                proc.args,
+                output=proc.stdout,
+                stderr=proc.stderr,
+            )
         run_command(["pdfcrop", "math.pdf", "math-crop.pdf"], cwd=tmp)
         run_command(
             [
